@@ -169,3 +169,8 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+.rain_clounds_venv/
+Ollama Setup/
+Postgres_Setup/
+.env
