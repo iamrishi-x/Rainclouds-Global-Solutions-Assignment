@@ -131,19 +131,22 @@ def format_docs(docs):
 
 def retriever_eval(question: str, vector_store, similarity_search):  
     logger.debug(f"Performing similarity content check with search type: {similarity_search}.")
+    chunks = {}
     if similarity_search == "similarity":
         # Retrieve top-k documents using vector-based similarity
         docs = vector_store.similarity_search(question, k=3)
         logger.info(f"Found {len(docs)} relevant documents.")
         for i, doc in enumerate(docs):
             logger.debug(f"{i} - Using chunk (ID: {doc.metadata['id']}): {doc.page_content}...")
+            chunks.update({doc.metadata["id"]: doc.page_content})
     elif similarity_search == "bm25":
         docs = fetch_all_documents()
         bm25_retriever = BM25Retriever.from_documents(documents=docs)
         docs = bm25_retriever.invoke(question)
         for i, doc in enumerate(docs):
             logger.debug(f"{i} - Using chunk (ID: {doc.metadata['id']}): {doc.page_content}...")
-    return docs[:3]  # Return top 3 reranked documents
+            chunks.update({doc.metadata["id"]: doc.page_content})
+    return docs[:3],chunks  # Return top 3 reranked documents
 
 # Enhanced RAG Chain with Preprocessing and Optimization
 def create_chain(llm, retriever_similarity):
@@ -156,9 +159,11 @@ def create_chain(llm, retriever_similarity):
     Do not add any extra details, explanations, or generalizations. 
     Provide a direct answer based strictly on the context without any elaboration or assumptions. 
     Answer should be short and exact 90 percent from the context.
+    Answer with max in 100 words.
     """
 
     rag_prompt = ChatPromptTemplate.from_template(RAG_TEMPLATE)
+    print(f"rag_prompt ---- {rag_prompt}")
     return (
         RunnablePassthrough.assign(context=lambda input: format_docs(input["context"]))
         | rag_prompt
@@ -197,18 +202,22 @@ async def upload_pdf(file: UploadFile, chunk_size: int = 1000):
     return JSONResponse(content={"message": "PDF processed and embeddings inserted successfully.", "processing_time": elapsed_time})
 
 @app.post("/query/")
-async def query(question: str = Form(...),type: Options_Retriever_type = Form(...),model: Model_pick = Query(..., description="Choose a model", alias="model_option")):
+async def query(question: str = Form(...),type: Options_Retriever_type = Form(...),model: Model_pick = Form(...)):
     logger.debug(f"Processing query: {question} | Retriever type: {type} | Model: {model}")
+    print(f"Processing query: {question} | Retriever type: {type} | Model: {model}")
     try:
+        # type = "bm25"
+        # model = "qwen:1.8b"
+        # question = "What is the AC-01 Control Policy?"
         start_time = time.time()
         llm = ChatOllama(model= model)
         # similarity for similarity_check and bm25 for bm25_retriever
-        retriever = retriever_eval(question, vector_store, type)  
+        retriever,chunks_dict = retriever_eval(question, vector_store, type)  
         chain = create_chain(llm, retriever)
         response = chain.invoke({"context": retriever, "question": question})
         elapsed_time = time.time() - start_time
         logger.info(f"Query processed in {elapsed_time:.2f} seconds.")
-        return JSONResponse(content={"response": response, "query_time": elapsed_time})
+        return JSONResponse(content={"response": response, "query_time": elapsed_time, "chunks_ID": chunks_dict})
     except Exception as e:
         logger.error(f"Error processing query: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing query: {str(e)}")
